@@ -31,6 +31,9 @@
                         'slide-up': 'slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
                         'scale-in': 'scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
                         'fade-in': 'fadeIn 0.2s ease-out',
+                        'bounce-slow': 'bounce 2s infinite',
+                        'pulse-fast': 'pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'spin': 'spin 1s linear infinite',
                     },
                     keyframes: {
                         slideUp: {
@@ -76,45 +79,26 @@
         .ios-safe-top { padding-top: env(safe-area-inset-top); }
         .ios-safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
         
-        /* Glassmorphism Classes */
-        .glass {
-            background: rgba(255, 255, 255, 0.65);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.4);
-        }
-        .dark .glass {
-            background: rgba(30, 30, 30, 0.60);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-        }
-        
-        .glass-card {
-            background: rgba(255, 255, 255, 0.8);
-            backdrop-filter: blur(12px);
-            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
-        }
-        .dark .glass-card {
-            background: rgba(40, 40, 40, 0.7);
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-        }
-
         /* Utilities */
         .hide-scrollbar::-webkit-scrollbar { display: none; }
         .h-dvh { height: 100vh; height: 100dvh; }
 
-        /* Scanner Specific Fixes */
+        /* Scanner Specific Fixes with Digital Zoom Simulation */
         #qr-reader {
             width: 100% !important;
             height: 100% !important;
             border: none !important;
             background: black;
+            border-radius: 1rem;
+            overflow: hidden;
         }
         #qr-reader video {
             width: 100% !important;
             height: 100% !important;
             object-fit: cover !important;
-            border-radius: 0 !important;
+            border-radius: 1rem;
+            /* Digital Zoom for Wide Angle Lenses */
+            transform: scale(1.5); 
         }
     </style>
 </head>
@@ -131,6 +115,19 @@
             return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(amount);
         };
 
+        const formatInputDisplay = (val) => {
+            if (!val) return "0";
+            if (val.endsWith('.')) {
+                const parts = val.split('.');
+                return parseInt(parts[0]).toLocaleString() + '.';
+            }
+            if (val.includes('.')) {
+                const parts = val.split('.');
+                return parseInt(parts[0]).toLocaleString() + '.' + parts[1];
+            }
+            return parseInt(val).toLocaleString();
+        };
+
         const generateUUID = () => {
             return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
                 var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
@@ -139,8 +136,7 @@
         };
 
         const validateName = (name) => {
-            // Only allow English letters, numbers, and spaces
-            return /^[A-Za-z0-9\s]+$/.test(name);
+            return /^[A-Za-z0-9\s]*$/.test(name);
         };
 
         // --- Custom Modal Component ---
@@ -208,7 +204,7 @@
             const [modalConfig, setModalConfig] = useState({ isOpen: false, type: 'alert' });
 
             useEffect(() => {
-                const savedData = localStorage.getItem("monopoly_data_v10");
+                const savedData = localStorage.getItem("monopoly_data_v16");
                 const savedTheme = localStorage.getItem("monopoly_theme") || "auto";
                 setTheme(savedTheme);
 
@@ -227,7 +223,7 @@
 
             useEffect(() => {
                 if (userData) {
-                    localStorage.setItem("monopoly_data_v10", JSON.stringify({ user: userData, history }));
+                    localStorage.setItem("monopoly_data_v16", JSON.stringify({ user: userData, history }));
                 }
             }, [userData, history]);
 
@@ -239,12 +235,8 @@
                 localStorage.setItem("monopoly_theme", theme);
             }, [theme]);
 
-            // --- Icon Refresh Strategy (Stable v4 approach + optimizations) ---
-            // Trigger icon refresh on every render to ensure <i> tags are replaced
             useLayoutEffect(() => {
-                if (window.lucide) {
-                    window.lucide.createIcons();
-                }
+                if (window.lucide) window.lucide.createIcons();
             });
 
             const showModal = (config) => setModalConfig({ isOpen: true, ...config });
@@ -320,33 +312,45 @@
                 return true;
             };
 
-            const handlePayInputConfirm = () => {
-                const rawVal = tempAmount.replace(/,/g, '');
-                const val = parseInt(rawVal);
-                
+            const handleNumpadConfirm = () => {
+                const val = parseInt(parseFloat(tempAmount));
                 if (!val) return showModal({ type: 'alert', title: '錯誤', message: '請輸入有效金額', onConfirm: closeModal });
 
-                if (userData.balance - val < 0) {
-                    showModal({
-                        type: 'confirm',
-                        title: '破產警告',
-                        message: `支付此金額 (${formatMoney(val)}) 將導致餘額不足！\n您確定要宣告破產嗎？`,
-                        confirmText: "宣告破產",
-                        cancelText: "取消交易",
-                        onConfirm: () => {
-                            closeModal();
-                            handleTransaction(val, 'pay', '支付並破產', '未知');
-                        },
-                        onCancel: closeModal
+                if (overlay.type === 'pay_input') {
+                    if (userData.balance - val < 0) {
+                        showModal({
+                            type: 'confirm',
+                            title: '破產警告',
+                            message: `支付此金額 (${formatMoney(val)}) 將導致餘額不足！\n您確定要宣告破產嗎？`,
+                            confirmText: "宣告破產",
+                            cancelText: "取消交易",
+                            onConfirm: () => {
+                                closeModal();
+                                handleTransaction(val, 'pay', '支付並破產', '未知');
+                            },
+                            onCancel: closeModal
+                        });
+                        return;
+                    }
+                    setOverlay(prev => ({ ...prev, step: 'choose_target', amount: val }));
+
+                } else if (overlay.type === 'bank_static_input') {
+                    handleTransaction(val, 'receive', '銀行臨櫃提款', '銀行');
+                    setOverlay({ 
+                        type: 'success_msg', 
+                        title: '提款成功', 
+                        msg: `已從銀行領取`,
+                        amount: val,
+                        sub: '請出示畫面供檢查',
+                        theme: 'green'
                     });
-                    return;
                 }
-                setOverlay(prev => ({ ...prev, step: 'choose_target', amount: val }));
             };
 
             const generatePayQR = () => {
                 const val = overlay.amount;
-                if (handleTransaction(val, 'pay', '轉帳給玩家', '玩家掃描取款')) {
+                // CHANGED: Description '轉帳給其他人'
+                if (handleTransaction(val, 'pay', '轉帳給其他人', '轉帳')) {
                     const payload = {
                         type: 'p2p_transfer',
                         sender: userData.name,
@@ -370,8 +374,10 @@
                     setOverlay({ 
                         type: 'success_msg', 
                         title: '支付成功', 
-                        msg: `已支付 ${formatMoney(val)} 給銀行`, 
-                        sub: '請出示畫面供檢查'
+                        msg: `已支付給銀行`, 
+                        amount: val,
+                        sub: '請出示畫面供檢查',
+                        theme: 'rose' // CHANGED: Softer red (Rose)
                     });
                 }
             };
@@ -401,31 +407,16 @@
                     if (data.type === 'p2p_transfer') {
                         handleTransaction(data.amount, 'receive', `來自 ${data.sender}`, data.sender);
                         setUserData(prev => ({...prev, processedIds: [...prev.processedIds, data.id]}));
-                        showModal({ type: 'alert', title: '收款成功', message: `已收到 ${formatMoney(data.amount)}`, onConfirm: closeModal });
+                        setOverlay({ type: 'success_msg', title: '收款成功', msg: `來自 ${data.sender}`, amount: data.amount, theme: 'green', sub: '已存入錢包' });
                     
                     } else if (data.type === 'bank_withdraw') {
                         handleTransaction(data.amount, 'receive', '銀行撥款', '銀行');
                         setUserData(prev => ({...prev, processedIds: [...prev.processedIds, data.id]}));
-                        showModal({ type: 'alert', title: '收款成功', message: `已收到銀行撥款 ${formatMoney(data.amount)}`, onConfirm: closeModal });
+                        setOverlay({ type: 'success_msg', title: '收款成功', msg: `銀行撥款`, amount: data.amount, theme: 'green', sub: '已存入錢包' });
                     
                     } else if (data.action === 'bank_static' || (data.amount === null && !data.sender)) {
-                        showModal({
-                            type: 'prompt',
-                            title: '銀行臨櫃提款',
-                            message: '請輸入提款金額：',
-                            inputPlaceholder: '金額',
-                            onConfirm: (val) => {
-                                const amount = parseInt(val);
-                                if (amount > 0) {
-                                    handleTransaction(amount, 'receive', '銀行臨櫃提款', '銀行');
-                                    closeModal();
-                                    showModal({ type: 'alert', title: '提款成功', message: `已提款 ${formatMoney(amount)}`, onConfirm: closeModal });
-                                } else {
-                                    closeModal();
-                                }
-                            },
-                            onCancel: closeModal
-                        });
+                        setTempAmount("");
+                        setOverlay({ type: 'bank_static_input' });
                     } else {
                         throw new Error("未知的 QR 格式");
                     }
@@ -492,35 +483,55 @@
 
             const Numpad = ({ onConfirm, label = "確定" }) => {
                 const add = (d) => setTempAmount(prev => {
-                    const raw = prev.replace(/,/g, '');
-                    return (raw.length > 9) ? prev : parseInt(raw + d).toLocaleString();
+                    if (d === '.' && prev.includes('.')) return prev;
+                    if (d === '.' && prev === '') return "0.";
+                    return prev + d;
                 });
+                
                 const multi = (m) => setTempAmount(prev => {
                     if(!prev) return prev;
-                    return (parseInt(prev.replace(/,/g,'')) * m).toLocaleString();
+                    const val = parseFloat(prev);
+                    if (isNaN(val)) return prev;
+                    return (val * m).toString();
                 });
+                
                 const del = () => setTempAmount(prev => {
                     if(prev.length <= 1) return "";
-                    return parseInt(prev.replace(/,/g,'').slice(0,-1)).toLocaleString();
+                    return prev.slice(0,-1);
                 });
+
+                const clear = () => setTempAmount("");
 
                 return (
                     <div className="bg-gray-100 dark:bg-[#1C1C1E] border-t border-gray-200 dark:border-gray-800 p-4 rounded-t-3xl shadow-[0_-4px_20px_rgba(0,0,0,0.1)]">
                         <div className="bg-white dark:bg-black text-black dark:text-white border-gray-200 dark:border-gray-800 p-4 rounded-xl mb-4 text-right text-3xl font-mono shadow-inner border h-16 flex items-center justify-end font-bold tracking-wider">
-                            {tempAmount || "0"}
+                            {formatInputDisplay(tempAmount)}
                         </div>
                         <div className="grid grid-cols-3 gap-3 mb-2">
                             {[1,2,3,4,5,6,7,8,9].map(n => (
                                 <button key={n} onClick={()=>add(n)} className="bg-white dark:bg-[#2C2C2E] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-transform">{n}</button>
                             ))}
-                            <button onClick={()=>add(0)} className="bg-white dark:bg-[#2C2C2E] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-transform">0</button>
-                            <button onClick={del} className="bg-gray-200 dark:bg-[#3A3A3C] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm flex items-center justify-center"><i data-lucide="delete"></i></button>
-                            <button onClick={()=>setTempAmount("")} className="bg-red-100 dark:bg-red-900/30 text-red-500 p-4 rounded-xl text-lg font-bold shadow-sm">C</button>
+                            {!superMode && (
+                                <>
+                                    <button onClick={clear} className="bg-red-100 dark:bg-red-900/30 text-red-500 p-4 rounded-xl text-lg font-bold shadow-sm">C</button>
+                                    <button onClick={()=>add(0)} className="bg-white dark:bg-[#2C2C2E] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-transform">0</button>
+                                    <button onClick={del} className="bg-gray-200 dark:bg-[#3A3A3C] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm flex items-center justify-center"><i data-lucide="delete"></i></button>
+                                </>
+                            )}
+                            {superMode && (
+                                <>
+                                    <button onClick={()=>add('.')} className="bg-white dark:bg-[#2C2C2E] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-transform">.</button>
+                                    <button onClick={()=>add(0)} className="bg-white dark:bg-[#2C2C2E] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-transform">0</button>
+                                    <button onClick={del} className="bg-gray-200 dark:bg-[#3A3A3C] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm flex items-center justify-center"><i data-lucide="delete"></i></button>
+                                </>
+                            )}
                         </div>
+
                         {superMode && (
-                            <div className="grid grid-cols-2 gap-3 mb-3">
-                                <button onClick={()=>multi(1000)} className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 p-3 rounded-xl font-bold">K (000)</button>
-                                <button onClick={()=>multi(1000000)} className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 p-3 rounded-xl font-bold">M (000,000)</button>
+                            <div className="grid grid-cols-3 gap-3 mb-3">
+                                <button onClick={clear} className="bg-red-100 dark:bg-red-900/30 text-red-500 p-4 rounded-xl text-lg font-bold shadow-sm">C</button>
+                                <button onClick={()=>multi(1000000)} className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 p-3 rounded-xl font-bold">M</button>
+                                <button onClick={()=>multi(1000)} className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 p-3 rounded-xl font-bold">K</button>
                             </div>
                         )}
                         <button onClick={onConfirm} className="w-full bg-ios-blue text-white py-4 rounded-xl text-xl font-bold shadow-lg shadow-blue-500/30 active:scale-95 transition-transform">
@@ -564,49 +575,67 @@
 
             const ScannerController = ({ onScan, onClose }) => {
                 const [error, setError] = useState(null);
+                const [isProcessing, setIsProcessing] = useState(false);
 
                 useEffect(() => {
                     const html5QrCode = new Html5Qrcode("qr-reader");
+                    
                     const config = { 
-                        fps: 10, 
-                        qrbox: 250, // Standardize to number for better compatibility
-                        aspectRatio: window.innerWidth / window.innerHeight,
-                        videoConstraints: {
-                             facingMode: "environment",
-                             focusMode: "continuous"
-                        }
+                        fps: 15, 
+                        qrbox: { width: 250, height: 250 }, 
+                        aspectRatio: 1.0, 
+                        videoConstraints: { facingMode: "environment" }
                     };
                     
                     html5QrCode.start(
                         { facingMode: "environment" },
                         config,
                         (decodedText) => {
-                            html5QrCode.stop().then(() => {
-                                onScan(decodedText);
-                            }).catch(err => console.error(err));
+                            setIsProcessing(true); 
+                            html5QrCode.pause(); 
+                            setTimeout(() => {
+                                html5QrCode.stop().then(() => {
+                                    onScan(decodedText);
+                                }).catch(err => console.error("Stop failed", err));
+                            }, 500);
                         },
                         (errorMessage) => { }
                     ).catch(err => {
                         console.error("Camera error", err);
-                        setError("無法啟動相機。請確保您已授權瀏覽器使用相機，且目前使用 HTTPS 或 localhost 連線。");
+                        setError("無法啟動相機。請確認已允許權限，或使用 Safari/Chrome 瀏覽器。");
                     });
 
                     return () => {
                         if (html5QrCode.isScanning) {
-                            html5QrCode.stop().catch(e => console.error(e));
+                            html5QrCode.stop().catch(e => console.error("Cleanup stop error", e));
                         }
                     };
                 }, []);
 
                 return (
-                    <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
+                    <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center">
+                        <div className="absolute top-0 left-0 w-full flex justify-between items-center p-4 ios-safe-top text-white z-20">
+                             <h3 className="font-bold drop-shadow-md">掃描 QR Code</h3>
+                             <button onClick={onClose} className="p-2 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center"><i data-lucide="x"></i></button>
+                        </div>
+
+                        <div className="relative w-[300px] h-[300px] bg-black rounded-3xl overflow-hidden border-2 border-white/50 shadow-2xl">
+                            <div id="qr-reader" className="w-full h-full"></div>
+                            {isProcessing && (
+                                <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center z-10 backdrop-blur-sm">
+                                    <div className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin mb-3"></div>
+                                    <p className="text-white font-bold tracking-widest text-sm">PROCESSING</p>
+                                </div>
+                            )}
+                        </div>
+
                         {error && (
-                            <div className="bg-red-600/90 text-white p-4 rounded-xl backdrop-blur-md pointer-events-auto mx-4 text-center">
+                            <div className="mt-8 bg-red-600/90 text-white p-4 rounded-xl backdrop-blur-md mx-4 text-center max-w-xs">
                                 <p className="mb-4">{error}</p>
                                 <button onClick={onClose} className="bg-white text-red-600 px-4 py-2 rounded-lg font-bold">關閉</button>
                             </div>
                         )}
-                        {/* No custom frame here anymore, just video feed */}
+                        {!error && !isProcessing && <p className="text-white/60 text-sm mt-8">將 QR Code 置於方框內</p>}
                     </div>
                 );
             };
@@ -614,53 +643,11 @@
             // --- Views ---
 
             if (view === 'welcome') {
-                return (
-                    <div className="h-full flex flex-col items-center justify-center p-8 glass relative">
-                         {installPrompt && (
-                            <div className="absolute top-0 left-0 w-full bg-ios-blue/10 p-4 text-xs text-center text-ios-blue font-bold backdrop-blur-sm z-50 pt-safe-top">
-                                建議使用 Chrome 或 Safari 開啟並安裝到桌面以獲得最佳體驗
-                            </div>
-                        )}
-                        <div className="text-center mb-10">
-                            <h1 className="text-5xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-blue-500 to-purple-600 mb-2">
-                                Monopoly<br/>Wallet
-                            </h1>
-                            <p className="text-gray-500 dark:text-gray-400">地產大亨電子錢包</p>
-                        </div>
-                        <form onSubmit={(e) => { 
-                            e.preventDefault(); 
-                            const fd = new FormData(e.target); 
-                            const name = fd.get('name');
-                            if(name) { 
-                                if (!validateName(name)) {
-                                     showModal({ type: 'alert', title: '格式錯誤', message: '名稱只能包含英文字母、數字與空白', onConfirm: closeModal });
-                                     return;
-                                }
-                                setUserData({name: name, balance: INITIAL_BALANCE, status: 'active', processedIds: [], settledAssets: 0}); 
-                                setView("home"); 
-                            }
-                        }} className="w-full max-w-xs space-y-4">
-                            <input name="name" type="text" placeholder="輸入玩家名稱 (僅限英文數字)" className="w-full p-4 bg-white/50 dark:bg-black/30 rounded-2xl text-center text-lg backdrop-blur-md border border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-ios-blue outline-none placeholder-gray-400 text-black dark:text-white" autoFocus />
-                            <button type="submit" className="w-full bg-ios-blue text-white py-4 rounded-2xl font-bold shadow-lg shadow-blue-500/30 active:scale-95 transition-transform">開始遊戲</button>
-                        </form>
-                    </div>
-                );
+                return <WelcomeScreen onStart={(name) => { setUserData({name: name, balance: INITIAL_BALANCE, status: 'active', processedIds: [], settledAssets: 0}); setView("home"); }} installPrompt={installPrompt} />;
             }
 
             if (scanMode) {
-                return (
-                    <div className="fixed inset-0 z-50 bg-black flex flex-col">
-                         <div id="qr-reader" className="absolute inset-0 w-full h-full bg-black"></div>
-                         
-                         {/* Header Overlay */}
-                         <div className="absolute top-0 left-0 w-full flex justify-between items-center p-4 ios-safe-top text-white z-10 bg-gradient-to-b from-black/80 to-transparent">
-                             <h3 className="font-bold drop-shadow-md">{scanMode === 'bank_auth' ? '掃描銀行金鑰' : '掃描 QR Code'}</h3>
-                             <button onClick={() => setScanMode(null)} className="p-2 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center"><i data-lucide="x"></i></button>
-                         </div>
-                         
-                         <ScannerController onScan={onScanSuccess} onClose={() => setScanMode(null)} />
-                    </div>
-                );
+                return <ScannerController onScan={onScanSuccess} onClose={() => setScanMode(null)} />;
             }
 
             const isBankrupt = userData?.status === 'bankrupt';
@@ -678,9 +665,8 @@
                                         <i data-lucide="chevron-left"></i><span className="font-bold ml-1">返回</span>
                                     </button>
                                 ) : (
-                                    // HOME VIEW HEADER - Left Aligned, Gray Title
                                     <div className="flex flex-col">
-                                        <span className="text-[10px] uppercase font-bold text-ios-gray tracking-widest">Monopoly Wallet</span>
+                                        <span className="text-[12px] uppercase font-black text-gray-400 tracking-wider">MONOPOLY WALLET</span>
                                         <span className="font-bold text-lg text-black dark:text-white">Hi, {userData?.name}</span>
                                     </div>
                                 )}
@@ -822,7 +808,7 @@
                                                     <p className={`font-bold font-mono ${item.type==='receive'?'text-ios-green':'text-black dark:text-white'}`}>
                                                         {item.type==='receive'?'+':'-'}{formatMoney(item.amount)}
                                                     </p>
-                                                    <p className="text-xs text-gray-400">{new Date(item.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
+                                                    <p className="text-xs text-gray-400">{new Date(item.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}</p>
                                                 </div>
                                             </div>
                                         ))}
@@ -871,7 +857,7 @@
                             <div className="ios-safe-top bg-white dark:bg-[#1C1C1E]"></div>
                             <div className="bg-white dark:bg-[#1C1C1E] p-4 flex justify-between items-center shadow-sm border-b border-gray-200 dark:border-gray-800">
                                 <h2 className="text-lg font-bold">
-                                    {overlay.type === 'pay_input' ? '輸入金額' : 
+                                    {overlay.type === 'pay_input' || overlay.type === 'bank_static_input' ? '輸入金額' : 
                                      overlay.type === 'show_qr' ? 'QR Code' : 
                                      overlay.type === 'settings' ? '設定' : '訊息'}
                                 </h2>
@@ -879,15 +865,17 @@
                             </div>
                             
                             <div className="flex-1 overflow-y-auto flex flex-col">
-                                {overlay.type === 'pay_input' && !overlay.step && (
+                                {(overlay.type === 'pay_input' || overlay.type === 'bank_static_input') && !overlay.step && (
                                     <div className="h-full flex flex-col justify-between">
                                         <div className="flex-1 flex flex-col items-center justify-center">
-                                            <p className="text-gray-500">輸入支付金額</p>
+                                            <p className="text-gray-500">
+                                                {overlay.type === 'bank_static_input' ? '輸入取款金額' : '輸入支付金額'}
+                                            </p>
                                             <button onClick={() => setSuperMode(!superMode)} className={`mt-4 px-3 py-1 rounded-full text-xs font-bold border ${superMode ? 'bg-yellow-500 text-white border-yellow-500' : 'text-gray-400 border-gray-300 dark:border-gray-700'}`}>
                                                 {superMode ? 'SUPER' : 'NORMAL'}
                                             </button>
                                         </div>
-                                        <Numpad label="下一步" onConfirm={handlePayInputConfirm} />
+                                        <Numpad label={overlay.type === 'bank_static_input' ? "確認領取" : "下一步"} onConfirm={handleNumpadConfirm} />
                                     </div>
                                 )}
                                 {overlay.type === 'pay_input' && overlay.step === 'choose_target' && (
@@ -924,13 +912,30 @@
                                     </div>
                                 )}
                                 {overlay.type === 'success_msg' && (
-                                    <div className="flex-1 flex flex-col items-center justify-center p-8">
-                                        <div className="w-24 h-24 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center mb-6 animate-scale-in">
-                                            <i data-lucide="check" className="w-12 h-12 text-green-500"></i>
+                                    <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden">
+                                        <div className={`absolute inset-0 ${overlay.theme === 'rose' ? 'bg-rose-500/5' : overlay.theme === 'green' ? 'bg-green-500/5' : 'bg-blue-500/5'} animate-pulse-fast pointer-events-none`}></div>
+                                        
+                                        <div className={`w-24 h-24 ${overlay.theme === 'rose' ? 'bg-rose-100 dark:bg-rose-900' : overlay.theme === 'green' ? 'bg-green-100 dark:bg-green-900' : 'bg-blue-100 dark:bg-blue-900'} rounded-full flex items-center justify-center mb-6 shadow-lg`}>
+                                            <div className="animate-bounce-slow">
+                                                <i data-lucide="check" className={`w-12 h-12 ${overlay.theme === 'rose' ? 'text-rose-500' : overlay.theme === 'green' ? 'text-green-500' : 'text-blue-500'}`}></i>
+                                            </div>
                                         </div>
-                                        <h2 className="text-2xl font-bold mb-2">{overlay.title}</h2>
-                                        <p className="text-lg text-gray-600 dark:text-gray-300 mb-6">{overlay.msg}</p>
-                                        <div className="bg-gray-100 dark:bg-gray-800 px-4 py-2 rounded-lg text-sm text-gray-500">{overlay.sub}</div>
+                                        
+                                        <h2 className="text-2xl font-bold mb-1">{overlay.title}</h2>
+                                        <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">{overlay.msg}</p>
+                                        
+                                        {/* Huge Amount Display */}
+                                        <p className={`text-5xl font-black mb-8 tracking-tighter ${overlay.theme === 'rose' ? 'text-rose-600 dark:text-rose-400' : overlay.theme === 'green' ? 'text-green-600 dark:text-green-400' : 'text-blue-600 dark:text-blue-400'}`}>
+                                            {formatMoney(overlay.amount)}
+                                        </p>
+
+                                        <div className="bg-gray-100 dark:bg-gray-800 px-6 py-3 rounded-2xl text-center space-y-1">
+                                            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">TRANSACTION TIME</p>
+                                            <p className="text-xl font-mono font-bold text-gray-600 dark:text-gray-300">
+                                                {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}
+                                            </p>
+                                        </div>
+                                        <div className="mt-4 text-xs text-gray-400">{overlay.sub}</div>
                                     </div>
                                 )}
                                 {overlay.type === 'settings' && (
@@ -972,6 +977,64 @@
                             </div>
                         </div>
                     )}
+                </div>
+            );
+        };
+        
+        const WelcomeScreen = ({ onStart, installPrompt }) => {
+            const [name, setName] = useState("");
+            const [error, setError] = useState("");
+
+            const handleChange = (e) => {
+                const val = e.target.value;
+                setName(val);
+                if (val && !validateName(val)) {
+                    setError("僅限輸入英文字母、數字與空白");
+                } else {
+                    setError("");
+                }
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (name && !error) {
+                    onStart(name);
+                }
+            };
+
+            return (
+                <div className="h-full flex flex-col items-center justify-center p-8 glass relative">
+                     {installPrompt && (
+                        <div className="absolute top-0 left-0 w-full bg-ios-blue/10 p-4 text-xs text-center text-ios-blue font-bold backdrop-blur-sm z-50 pt-safe-top">
+                            建議使用 Chrome 或 Safari 開啟並安裝到桌面以獲得最佳體驗
+                        </div>
+                    )}
+                    <div className="text-center mb-10">
+                        <h1 className="text-5xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-blue-500 to-purple-600 mb-2">
+                            Monopoly<br/>Wallet
+                        </h1>
+                        <p className="text-gray-500 dark:text-gray-400">地產大亨電子錢包</p>
+                    </div>
+                    <form onSubmit={handleSubmit} className="w-full max-w-xs space-y-4">
+                        <div>
+                            <input 
+                                value={name}
+                                onChange={handleChange}
+                                type="text" 
+                                placeholder="輸入玩家名稱 (英文/數字)" 
+                                className={`w-full p-4 bg-white/50 dark:bg-black/30 rounded-2xl text-center text-lg backdrop-blur-md border ${error ? 'border-red-500 focus:ring-red-500' : 'border-gray-200 dark:border-gray-700 focus:ring-ios-blue'} focus:ring-2 outline-none placeholder-gray-400 text-black dark:text-white transition-all`}
+                                autoFocus 
+                            />
+                            {error && <p className="text-red-500 text-xs text-center mt-2">{error}</p>}
+                        </div>
+                        <button 
+                            type="submit" 
+                            disabled={!name || !!error}
+                            className="w-full bg-ios-blue text-white py-4 rounded-2xl font-bold shadow-lg shadow-blue-500/30 active:scale-95 transition-transform disabled:opacity-50 disabled:active:scale-100"
+                        >
+                            開始遊戲
+                        </button>
+                    </form>
                 </div>
             );
         };
