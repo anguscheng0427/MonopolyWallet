@@ -25,6 +25,7 @@
                             dark: '#1C1C1E',
                             gray: '#8E8E93',
                             lightGray: '#F2F2F7',
+                            rose: '#FF2D55',
                         }
                     },
                     animation: {
@@ -83,22 +84,42 @@
         .hide-scrollbar::-webkit-scrollbar { display: none; }
         .h-dvh { height: 100vh; height: 100dvh; }
 
-        /* Scanner Specific Fixes with Digital Zoom Simulation */
+        /* Scanner Video Fixes - Zoom applied via inline style */
         #qr-reader {
             width: 100% !important;
             height: 100% !important;
             border: none !important;
             background: black;
-            border-radius: 1rem;
             overflow: hidden;
         }
         #qr-reader video {
             width: 100% !important;
             height: 100% !important;
             object-fit: cover !important;
-            border-radius: 1rem;
-            /* Digital Zoom for Wide Angle Lenses */
-            transform: scale(1.5); 
+        }
+
+        /* Custom Range Slider */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 24px;
+            width: 24px;
+            border-radius: 50%;
+            background: #ffffff;
+            cursor: pointer;
+            margin-top: -10px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: rgba(255,255,255,0.3);
+            border-radius: 2px;
         }
     </style>
 </head>
@@ -108,7 +129,7 @@
     <script type="text/babel">
         const { useState, useEffect, useRef, useCallback, useLayoutEffect } = React;
 
-        // --- Configuration & Utils ---
+        // --- 1. Helpers & Protocol V4 ---
         const INITIAL_BALANCE = 0;
         
         const formatMoney = (amount) => {
@@ -139,7 +160,105 @@
             return /^[A-Za-z0-9\s]*$/.test(name);
         };
 
-        // --- Custom Modal Component ---
+        // QR Protocol V4: type|sender|amount|timestamp
+        const encodeQR = (type, sender, amount, timestamp) => {
+            let t = 'p'; 
+            if (type === 'bank_withdraw') t = 'b';
+            if (type === 'bank_static') t = 's';
+            // Safety: remove pipes from name to avoid format break
+            const safeSender = sender.replace(/\|/g, '');
+            return `${t}|${safeSender}|${amount}|${timestamp}`;
+        };
+
+        const decodeQR = (str) => {
+            try {
+                // Support legacy JSON just in case old QRs exist
+                if (str.startsWith('{')) {
+                    const json = JSON.parse(str);
+                    return { ...json, id: json.id || `${json.sender}-${json.amount}-${json.timestamp}` };
+                }
+
+                const parts = str.split('|');
+                if (parts.length < 1) throw new Error("Invalid Format");
+
+                if (parts[0] === 's') return { action: 'bank_static' };
+
+                const tMap = { 'p': 'p2p_transfer', 'b': 'bank_withdraw' };
+                const type = tMap[parts[0]] || 'unknown';
+                const sender = parts[1];
+                const amount = parseInt(parts[2]);
+                const timestamp = parseInt(parts[3]);
+                
+                // Reconstruct Unique ID for deduplication
+                const id = `${sender}-${amount}-${timestamp}`;
+
+                return { type, sender, amount, timestamp, id };
+            } catch (e) {
+                console.error("Decode Error", e);
+                throw new Error("無法辨識的 QR Code");
+            }
+        };
+
+        // --- 2. Sub-Components ---
+
+        const WelcomeScreen = ({ onStart, installPrompt }) => {
+            const [name, setName] = useState("");
+            const [error, setError] = useState("");
+
+            const handleChange = (e) => {
+                const val = e.target.value;
+                setName(val);
+                if (val && !validateName(val)) {
+                    setError("僅限輸入英文字母、數字與空白");
+                } else {
+                    setError("");
+                }
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (name && !error) {
+                    onStart(name);
+                }
+            };
+
+            return (
+                <div className="h-full flex flex-col items-center justify-center p-8 glass relative">
+                     {installPrompt && (
+                        <div className="absolute top-0 left-0 w-full bg-ios-blue/10 p-4 text-xs text-center text-ios-blue font-bold backdrop-blur-sm z-50 pt-safe-top">
+                            建議使用 Chrome 或 Safari 開啟並安裝到桌面以獲得最佳體驗
+                        </div>
+                    )}
+                    <div className="text-center mb-10">
+                        <h1 className="text-5xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-blue-500 to-purple-600 mb-2">
+                            Monopoly<br/>Wallet
+                        </h1>
+                        <p className="text-gray-500 dark:text-gray-400">地產大亨電子錢包</p>
+                    </div>
+                    <form onSubmit={handleSubmit} className="w-full max-w-xs space-y-4">
+                        <div>
+                            <input 
+                                value={name}
+                                onChange={handleChange}
+                                type="text" 
+                                placeholder="輸入玩家名稱 (英文/數字)" 
+                                className={`w-full p-4 bg-white/50 dark:bg-black/30 rounded-2xl text-center text-lg backdrop-blur-md border ${error ? 'border-red-500 focus:ring-red-500' : 'border-gray-200 dark:border-gray-700 focus:ring-ios-blue'} focus:ring-2 outline-none placeholder-gray-400 text-black dark:text-white transition-all`}
+                                autoFocus 
+                            />
+                            {error && <p className="text-red-500 text-xs text-center mt-2">{error}</p>}
+                        </div>
+                        <button 
+                            type="submit" 
+                            disabled={!name || !!error}
+                            className="w-full bg-ios-blue text-white py-4 rounded-2xl font-bold shadow-lg shadow-blue-500/30 active:scale-95 transition-transform disabled:opacity-50 disabled:active:scale-100"
+                        >
+                            開始遊戲
+                        </button>
+                    </form>
+                </div>
+            );
+        };
+
         const Modal = ({ isOpen, type, title, message, onConfirm, onCancel, inputPlaceholder, confirmText = "確定", cancelText = "取消" }) => {
             const [inputValue, setInputValue] = useState("");
             
@@ -190,7 +309,195 @@
             );
         };
 
-        // --- Main App ---
+        const Numpad = ({ onConfirm, label = "確定", superMode, tempAmount, setTempAmount, multi, add, del, clear }) => {
+            return (
+                <div className="bg-gray-100 dark:bg-[#1C1C1E] border-t border-gray-200 dark:border-gray-800 p-4 rounded-t-3xl shadow-[0_-4px_20px_rgba(0,0,0,0.1)]">
+                    <div className="bg-white dark:bg-black text-black dark:text-white border-gray-200 dark:border-gray-800 p-4 rounded-xl mb-4 text-right text-3xl font-mono shadow-inner border h-16 flex items-center justify-end font-bold tracking-wider">
+                        {formatInputDisplay(tempAmount)}
+                    </div>
+                    <div className="grid grid-cols-3 gap-3 mb-2">
+                        {[1,2,3,4,5,6,7,8,9].map(n => (
+                            <button key={n} onClick={()=>add(n)} className="bg-white dark:bg-[#2C2C2E] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-transform">{n}</button>
+                        ))}
+                        {!superMode && (
+                            <>
+                                <button onClick={clear} className="bg-red-100 dark:bg-red-900/30 text-red-500 p-4 rounded-xl text-lg font-bold shadow-sm">C</button>
+                                <button onClick={()=>add(0)} className="bg-white dark:bg-[#2C2C2E] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-transform">0</button>
+                                <button onClick={del} className="bg-gray-200 dark:bg-[#3A3A3C] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm flex items-center justify-center"><i data-lucide="delete"></i></button>
+                            </>
+                        )}
+                        {superMode && (
+                            <>
+                                <button onClick={()=>add('.')} className="bg-white dark:bg-[#2C2C2E] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-transform">.</button>
+                                <button onClick={()=>add(0)} className="bg-white dark:bg-[#2C2C2E] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-transform">0</button>
+                                <button onClick={del} className="bg-gray-200 dark:bg-[#3A3A3C] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm flex items-center justify-center"><i data-lucide="delete"></i></button>
+                            </>
+                        )}
+                    </div>
+
+                    {superMode && (
+                        <div className="grid grid-cols-3 gap-3 mb-3">
+                            <button onClick={clear} className="bg-red-100 dark:bg-red-900/30 text-red-500 p-4 rounded-xl text-lg font-bold shadow-sm">C</button>
+                            <button onClick={()=>multi(1000000)} className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 p-3 rounded-xl font-bold">M</button>
+                            <button onClick={()=>multi(1000)} className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 p-3 rounded-xl font-bold">K</button>
+                        </div>
+                    )}
+                    <button onClick={onConfirm} className="w-full bg-ios-blue text-white py-4 rounded-xl text-xl font-bold shadow-lg shadow-blue-500/30 active:scale-95 transition-transform">
+                        {label}
+                    </button>
+                </div>
+            );
+        };
+
+        const QRDisplay = ({ value, label, sub, icon, showExpiry = true }) => {
+            const qrRef = useRef();
+            useEffect(() => {
+                if (qrRef.current) {
+                    qrRef.current.innerHTML = "";
+                    new QRCode(qrRef.current, {
+                        text: value, // Use compressed string
+                        width: 256,
+                        height: 256,
+                        colorDark : "#000000",
+                        colorLight : "#ffffff",
+                        correctLevel : QRCode.CorrectLevel.L // Low ECC for sparsity
+                    });
+                }
+            }, [value]);
+            return (
+                <div className="bg-white p-6 rounded-3xl shadow-2xl flex flex-col items-center max-w-sm mx-auto animate-scale-in">
+                    <h3 className="text-xl font-bold text-black mb-2">{label}</h3>
+                    <div className="relative my-4">
+                        <div ref={qrRef} className="p-2 border-2 border-gray-100 rounded-xl"></div>
+                        <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="bg-white p-1 rounded-full shadow-lg flex items-center justify-center">
+                                <i data-lucide={icon} className={`w-8 h-8 ${icon==='landmark'?'text-yellow-500 fill-yellow-500':'text-ios-blue fill-ios-blue'}`}></i>
+                            </div>
+                        </div>
+                    </div>
+                    <p className="text-gray-500 text-sm">{sub}</p>
+                    {showExpiry && <p className="text-xs text-red-400 mt-2">有效期限 5 分鐘</p>}
+                </div>
+            );
+        };
+
+        const ScannerController = ({ onScan, onClose }) => {
+            const [error, setError] = useState(null);
+            const [isProcessing, setIsProcessing] = useState(false);
+            const [zoom, setZoom] = useState(1.5); // Default digital zoom
+
+            // Load saved zoom preference
+            useEffect(() => {
+                const savedZoom = localStorage.getItem("scanner_zoom");
+                if (savedZoom) setZoom(parseFloat(savedZoom));
+            }, []);
+
+            const handleZoom = (e) => {
+                const val = parseFloat(e.target.value);
+                setZoom(val);
+                localStorage.setItem("scanner_zoom", val);
+            };
+
+            useEffect(() => {
+                const html5QrCode = new Html5Qrcode("qr-reader");
+                
+                const config = { 
+                    fps: 15, 
+                    qrbox: 250, 
+                    aspectRatio: 1.0, 
+                    videoConstraints: { facingMode: "environment" }
+                };
+                
+                html5QrCode.start(
+                    { facingMode: "environment" },
+                    config,
+                    (decodedText) => {
+                        setIsProcessing(true); 
+                        html5QrCode.pause(); 
+                        setTimeout(() => {
+                            html5QrCode.stop().then(() => {
+                                onScan(decodedText);
+                            }).catch(err => console.error("Stop failed", err));
+                        }, 500);
+                    },
+                    (errorMessage) => { }
+                ).catch(err => {
+                    console.error("Camera error", err);
+                    setError("無法啟動相機。請確認已允許權限，或使用 Safari/Chrome 瀏覽器。");
+                });
+
+                return () => {
+                    if (html5QrCode.isScanning) {
+                        html5QrCode.stop().catch(e => console.error("Cleanup stop error", e));
+                    }
+                };
+            }, []);
+
+            return (
+                <div className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center animate-fade-in">
+                    <div className="absolute top-0 left-0 w-full flex justify-between items-center p-4 ios-safe-top text-white z-20">
+                         <h3 className="font-bold drop-shadow-md">掃描 QR Code</h3>
+                         <button onClick={onClose} className="p-2 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center"><i data-lucide="x"></i></button>
+                    </div>
+
+                    <div className="relative w-[300px] h-[300px] bg-black rounded-3xl overflow-hidden shadow-2xl border-4 border-white/20">
+                        {/* Video Container with Zoom */}
+                        <div className="w-full h-full relative overflow-hidden">
+                            <style>{`
+                                #qr-reader video { 
+                                    transform: scale(${zoom}) !important; 
+                                    transform-origin: center center !important;
+                                    width: 100% !important;
+                                    height: 100% !important;
+                                    object-fit: cover !important;
+                                }
+                            `}</style>
+                            <div id="qr-reader" className="w-full h-full"></div>
+                        </div>
+
+                        {isProcessing && (
+                            <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-30 backdrop-blur-sm">
+                                <div className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin mb-3"></div>
+                                <p className="text-white font-bold tracking-widest text-sm">處理中...</p>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Manual Zoom Control */}
+                    {!error && !isProcessing && (
+                        <div className="w-[200px] mt-8 flex flex-col items-center space-y-3">
+                            <div className="flex justify-between w-full text-xs text-white/60 font-mono">
+                                <span>1.0x</span>
+                                <span>ZOOM</span>
+                                <span>3.0x</span>
+                            </div>
+                            <input 
+                                type="range" 
+                                min="1.0" 
+                                max="3.0" 
+                                step="0.1" 
+                                value={zoom} 
+                                onChange={handleZoom}
+                                className="w-full h-1 bg-white/30 rounded-lg appearance-none cursor-pointer hover:bg-white/50 transition-colors"
+                            />
+                        </div>
+                    )}
+
+                    {error && (
+                        <div className="mt-8 bg-red-600/90 text-white p-4 rounded-xl backdrop-blur-md mx-4 text-center max-w-xs">
+                            <p className="mb-4">{error}</p>
+                            <button onClick={onClose} className="bg-white text-red-600 px-4 py-2 rounded-lg font-bold">關閉</button>
+                        </div>
+                    )}
+                    
+                    {!error && !isProcessing && (
+                        <p className="text-white/40 text-xs mt-4">將 QR Code 置於方框中央</p>
+                    )}
+                </div>
+            );
+        };
+
+        // --- 3. Main App ---
         const App = () => {
             const [userData, setUserData] = useState(null);
             const [history, setHistory] = useState([]);
@@ -204,7 +511,7 @@
             const [modalConfig, setModalConfig] = useState({ isOpen: false, type: 'alert' });
 
             useEffect(() => {
-                const savedData = localStorage.getItem("monopoly_data_v16");
+                const savedData = localStorage.getItem("monopoly_data_v20");
                 const savedTheme = localStorage.getItem("monopoly_theme") || "auto";
                 setTheme(savedTheme);
 
@@ -223,7 +530,7 @@
 
             useEffect(() => {
                 if (userData) {
-                    localStorage.setItem("monopoly_data_v16", JSON.stringify({ user: userData, history }));
+                    localStorage.setItem("monopoly_data_v20", JSON.stringify({ user: userData, history }));
                 }
             }, [userData, history]);
 
@@ -238,6 +545,24 @@
             useLayoutEffect(() => {
                 if (window.lucide) window.lucide.createIcons();
             });
+
+            // Numpad Logic Helpers
+            const numpadAdd = (d) => setTempAmount(prev => {
+                if (d === '.' && prev.includes('.')) return prev;
+                if (d === '.' && prev === '') return "0.";
+                return prev + d;
+            });
+            const numpadMulti = (m) => setTempAmount(prev => {
+                if(!prev) return prev;
+                const val = parseFloat(prev);
+                if (isNaN(val)) return prev;
+                return (val * m).toString();
+            });
+            const numpadDel = () => setTempAmount(prev => {
+                if(prev.length <= 1) return "";
+                return prev.slice(0,-1);
+            });
+            const numpadClear = () => setTempAmount("");
 
             const showModal = (config) => setModalConfig({ isOpen: true, ...config });
             const closeModal = () => setModalConfig(prev => ({ ...prev, isOpen: false }));
@@ -292,8 +617,11 @@
                     newBalance += numAmount;
                 }
 
+                // Internal ID for history key only
+                const historyId = Math.random().toString(36).substr(2, 9);
+
                 const record = {
-                    id: generateUUID(),
+                    id: historyId,
                     type,
                     amount: numAmount,
                     description,
@@ -349,18 +677,14 @@
 
             const generatePayQR = () => {
                 const val = overlay.amount;
-                // CHANGED: Description '轉帳給其他人'
+                const timestamp = Date.now();
+                // COMPACT QR ENCODE
+                const qrData = encodeQR('p2p_transfer', userData.name, val, timestamp);
+
                 if (handleTransaction(val, 'pay', '轉帳給其他人', '轉帳')) {
-                    const payload = {
-                        type: 'p2p_transfer',
-                        sender: userData.name,
-                        amount: val,
-                        timestamp: Date.now(),
-                        id: generateUUID()
-                    };
                     setOverlay({ 
                         type: 'show_qr', 
-                        payload: payload, 
+                        payload: qrData, 
                         label: formatMoney(val), 
                         subLabel: "請對方掃描收款", 
                         icon: 'user' 
@@ -377,7 +701,7 @@
                         msg: `已支付給銀行`, 
                         amount: val,
                         sub: '請出示畫面供檢查',
-                        theme: 'rose' // CHANGED: Softer red (Rose)
+                        theme: 'rose'
                     });
                 }
             };
@@ -385,15 +709,22 @@
             const onScanSuccess = (decodedText) => {
                 setScanMode(null);
                 try {
-                    const data = JSON.parse(decodedText);
+                    // COMPACT QR DECODE
+                    const data = decodeQR(decodedText);
                     const now = Date.now();
 
                     if (scanMode === 'bank_auth') {
-                        if (data.action === 'bank_auth' || data.type === 'bank_auth_key') {
+                        if (decodedText.includes("bank_auth") || data.type === 'bank_auth') {
                             setView('bank_mode');
                         } else {
                             showModal({ type: 'alert', title: '錯誤', message: '無效的銀行權限 QR Code', onConfirm: closeModal });
                         }
+                        return;
+                    }
+
+                    if (data.action === 'bank_static') {
+                        setTempAmount("");
+                        setOverlay({ type: 'bank_static_input' });
                         return;
                     }
 
@@ -414,9 +745,6 @@
                         setUserData(prev => ({...prev, processedIds: [...prev.processedIds, data.id]}));
                         setOverlay({ type: 'success_msg', title: '收款成功', msg: `銀行撥款`, amount: data.amount, theme: 'green', sub: '已存入錢包' });
                     
-                    } else if (data.action === 'bank_static' || (data.amount === null && !data.sender)) {
-                        setTempAmount("");
-                        setOverlay({ type: 'bank_static_input' });
                     } else {
                         throw new Error("未知的 QR 格式");
                     }
@@ -481,171 +809,17 @@
                 });
             };
 
-            const Numpad = ({ onConfirm, label = "確定" }) => {
-                const add = (d) => setTempAmount(prev => {
-                    if (d === '.' && prev.includes('.')) return prev;
-                    if (d === '.' && prev === '') return "0.";
-                    return prev + d;
-                });
-                
-                const multi = (m) => setTempAmount(prev => {
-                    if(!prev) return prev;
-                    const val = parseFloat(prev);
-                    if (isNaN(val)) return prev;
-                    return (val * m).toString();
-                });
-                
-                const del = () => setTempAmount(prev => {
-                    if(prev.length <= 1) return "";
-                    return prev.slice(0,-1);
-                });
+            // --- Render Logic (Same as v19) ---
+            
+            // ... (Reusing same render layout as v19, simplified here for brevity, 
+            // the full structure is in the App block above using `overlay` state)
 
-                const clear = () => setTempAmount("");
-
-                return (
-                    <div className="bg-gray-100 dark:bg-[#1C1C1E] border-t border-gray-200 dark:border-gray-800 p-4 rounded-t-3xl shadow-[0_-4px_20px_rgba(0,0,0,0.1)]">
-                        <div className="bg-white dark:bg-black text-black dark:text-white border-gray-200 dark:border-gray-800 p-4 rounded-xl mb-4 text-right text-3xl font-mono shadow-inner border h-16 flex items-center justify-end font-bold tracking-wider">
-                            {formatInputDisplay(tempAmount)}
-                        </div>
-                        <div className="grid grid-cols-3 gap-3 mb-2">
-                            {[1,2,3,4,5,6,7,8,9].map(n => (
-                                <button key={n} onClick={()=>add(n)} className="bg-white dark:bg-[#2C2C2E] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-transform">{n}</button>
-                            ))}
-                            {!superMode && (
-                                <>
-                                    <button onClick={clear} className="bg-red-100 dark:bg-red-900/30 text-red-500 p-4 rounded-xl text-lg font-bold shadow-sm">C</button>
-                                    <button onClick={()=>add(0)} className="bg-white dark:bg-[#2C2C2E] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-transform">0</button>
-                                    <button onClick={del} className="bg-gray-200 dark:bg-[#3A3A3C] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm flex items-center justify-center"><i data-lucide="delete"></i></button>
-                                </>
-                            )}
-                            {superMode && (
-                                <>
-                                    <button onClick={()=>add('.')} className="bg-white dark:bg-[#2C2C2E] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-transform">.</button>
-                                    <button onClick={()=>add(0)} className="bg-white dark:bg-[#2C2C2E] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-transform">0</button>
-                                    <button onClick={del} className="bg-gray-200 dark:bg-[#3A3A3C] text-black dark:text-white p-4 rounded-xl text-xl font-bold shadow-sm flex items-center justify-center"><i data-lucide="delete"></i></button>
-                                </>
-                            )}
-                        </div>
-
-                        {superMode && (
-                            <div className="grid grid-cols-3 gap-3 mb-3">
-                                <button onClick={clear} className="bg-red-100 dark:bg-red-900/30 text-red-500 p-4 rounded-xl text-lg font-bold shadow-sm">C</button>
-                                <button onClick={()=>multi(1000000)} className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 p-3 rounded-xl font-bold">M</button>
-                                <button onClick={()=>multi(1000)} className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 p-3 rounded-xl font-bold">K</button>
-                            </div>
-                        )}
-                        <button onClick={onConfirm} className="w-full bg-ios-blue text-white py-4 rounded-xl text-xl font-bold shadow-lg shadow-blue-500/30 active:scale-95 transition-transform">
-                            {label}
-                        </button>
-                    </div>
-                );
-            };
-
-            const QRDisplay = ({ value, label, sub, icon, showExpiry = true }) => {
-                const qrRef = useRef();
-                useEffect(() => {
-                    if (qrRef.current) {
-                        qrRef.current.innerHTML = "";
-                        new QRCode(qrRef.current, {
-                            text: typeof value === 'string' ? value : JSON.stringify(value),
-                            width: 256,
-                            height: 256,
-                            colorDark : "#000000",
-                            colorLight : "#ffffff",
-                            correctLevel : QRCode.CorrectLevel.H
-                        });
-                    }
-                }, [value]);
-                return (
-                    <div className="bg-white p-6 rounded-3xl shadow-2xl flex flex-col items-center max-w-sm mx-auto animate-scale-in">
-                        <h3 className="text-xl font-bold text-black mb-2">{label}</h3>
-                        <div className="relative my-4">
-                            <div ref={qrRef} className="p-2 border-2 border-gray-100 rounded-xl"></div>
-                            <div className="absolute inset-0 flex items-center justify-center">
-                                <div className="bg-white p-1 rounded-full shadow-lg flex items-center justify-center">
-                                    <i data-lucide={icon} className={`w-8 h-8 ${icon==='landmark'?'text-yellow-500 fill-yellow-500':'text-ios-blue fill-ios-blue'}`}></i>
-                                </div>
-                            </div>
-                        </div>
-                        <p className="text-gray-500 text-sm">{sub}</p>
-                        {showExpiry && <p className="text-xs text-red-400 mt-2">有效期限 5 分鐘</p>}
-                    </div>
-                );
-            };
-
-            const ScannerController = ({ onScan, onClose }) => {
-                const [error, setError] = useState(null);
-                const [isProcessing, setIsProcessing] = useState(false);
-
-                useEffect(() => {
-                    const html5QrCode = new Html5Qrcode("qr-reader");
-                    
-                    const config = { 
-                        fps: 15, 
-                        qrbox: { width: 250, height: 250 }, 
-                        aspectRatio: 1.0, 
-                        videoConstraints: { facingMode: "environment" }
-                    };
-                    
-                    html5QrCode.start(
-                        { facingMode: "environment" },
-                        config,
-                        (decodedText) => {
-                            setIsProcessing(true); 
-                            html5QrCode.pause(); 
-                            setTimeout(() => {
-                                html5QrCode.stop().then(() => {
-                                    onScan(decodedText);
-                                }).catch(err => console.error("Stop failed", err));
-                            }, 500);
-                        },
-                        (errorMessage) => { }
-                    ).catch(err => {
-                        console.error("Camera error", err);
-                        setError("無法啟動相機。請確認已允許權限，或使用 Safari/Chrome 瀏覽器。");
-                    });
-
-                    return () => {
-                        if (html5QrCode.isScanning) {
-                            html5QrCode.stop().catch(e => console.error("Cleanup stop error", e));
-                        }
-                    };
-                }, []);
-
-                return (
-                    <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center">
-                        <div className="absolute top-0 left-0 w-full flex justify-between items-center p-4 ios-safe-top text-white z-20">
-                             <h3 className="font-bold drop-shadow-md">掃描 QR Code</h3>
-                             <button onClick={onClose} className="p-2 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center"><i data-lucide="x"></i></button>
-                        </div>
-
-                        <div className="relative w-[300px] h-[300px] bg-black rounded-3xl overflow-hidden border-2 border-white/50 shadow-2xl">
-                            <div id="qr-reader" className="w-full h-full"></div>
-                            {isProcessing && (
-                                <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center z-10 backdrop-blur-sm">
-                                    <div className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin mb-3"></div>
-                                    <p className="text-white font-bold tracking-widest text-sm">PROCESSING</p>
-                                </div>
-                            )}
-                        </div>
-
-                        {error && (
-                            <div className="mt-8 bg-red-600/90 text-white p-4 rounded-xl backdrop-blur-md mx-4 text-center max-w-xs">
-                                <p className="mb-4">{error}</p>
-                                <button onClick={onClose} className="bg-white text-red-600 px-4 py-2 rounded-lg font-bold">關閉</button>
-                            </div>
-                        )}
-                        {!error && !isProcessing && <p className="text-white/60 text-sm mt-8">將 QR Code 置於方框內</p>}
-                    </div>
-                );
-            };
-
-            // --- Views ---
-
+            // Views: Welcome
             if (view === 'welcome') {
                 return <WelcomeScreen onStart={(name) => { setUserData({name: name, balance: INITIAL_BALANCE, status: 'active', processedIds: [], settledAssets: 0}); setView("home"); }} installPrompt={installPrompt} />;
             }
 
+            // Views: Scanner
             if (scanMode) {
                 return <ScannerController onScan={onScanSuccess} onClose={() => setScanMode(null)} />;
             }
@@ -665,7 +839,7 @@
                                         <i data-lucide="chevron-left"></i><span className="font-bold ml-1">返回</span>
                                     </button>
                                 ) : (
-                                    <div className="flex flex-col">
+                                    <div className="flex flex-col text-left">
                                         <span className="text-[12px] uppercase font-black text-gray-400 tracking-wider">MONOPOLY WALLET</span>
                                         <span className="font-bold text-lg text-black dark:text-white">Hi, {userData?.name}</span>
                                     </div>
@@ -692,6 +866,7 @@
                     )}
 
                     <div className="flex-1 overflow-y-auto overflow-x-hidden relative">
+                        {/* HOME / WALLET / BANK_MODE content structure remains exactly as v19 */}
                         {view === 'home' && (
                             <div className="p-6 space-y-6">
                                 <div onClick={() => !isBankrupt && !isSettled ? setView('wallet') : null} className={`w-full aspect-[1.586] rounded-3xl p-6 relative flex flex-col justify-between transition-transform duration-300 shadow-2xl ${!isBankrupt && !isSettled ? 'active:scale-95 cursor-pointer' : ''} ${isBankrupt ? 'bg-gradient-to-br from-gray-800 to-black border border-gray-700' : isSettled ? 'bg-gradient-to-br from-purple-500 to-indigo-600' : 'bg-gradient-to-br from-ios-blue to-cyan-500'}`}>
@@ -711,6 +886,7 @@
                                     </div>
                                     <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-white/20 to-transparent rounded-3xl pointer-events-none"></div>
                                 </div>
+                                {/* Rest of Home (Bankrupt msg / Settled / New Game Btn) */}
                                 {isBankrupt && (
                                     <div className="bg-red-50 dark:bg-red-900/20 p-6 rounded-2xl border border-red-100 dark:border-red-900/50 text-center animate-scale-in">
                                         <h2 className="text-2xl font-bold text-red-600 dark:text-red-400 mb-2">已破產</h2>
@@ -839,12 +1015,15 @@
                                             </button>
                                         </div>
                                     </div>
-                                    <Numpad label="產生取款 QR" onConfirm={() => {
+                                    <Numpad label="產生取款 QR" 
+                                        superMode={superMode} tempAmount={tempAmount} setTempAmount={setTempAmount} multi={numpadMulti} add={numpadAdd} del={numpadDel} clear={numpadClear}
+                                        onConfirm={() => {
                                         const rawVal = tempAmount.replace(/,/g, '');
                                         const val = parseInt(rawVal);
                                         if (!val) return;
-                                        const payload = { type: 'bank_withdraw', sender: 'Bank', amount: val, timestamp: Date.now(), id: generateUUID() };
-                                        setOverlay({ type: 'show_qr', payload, label: formatMoney(val), subLabel: "銀行撥款", icon: 'landmark' });
+                                        // Bank Generate QR (COMPACT)
+                                        const qrData = encodeQR('bank_withdraw', 'Bank', val, Date.now());
+                                        setOverlay({ type: 'show_qr', payload: qrData, label: formatMoney(val), subLabel: "銀行撥款", icon: 'landmark' });
                                         setTempAmount("");
                                     }} />
                                 </div>
@@ -875,7 +1054,9 @@
                                                 {superMode ? 'SUPER' : 'NORMAL'}
                                             </button>
                                         </div>
-                                        <Numpad label={overlay.type === 'bank_static_input' ? "確認領取" : "下一步"} onConfirm={handleNumpadConfirm} />
+                                        <Numpad label={overlay.type === 'bank_static_input' ? "確認領取" : "下一步"} 
+                                            superMode={superMode} tempAmount={tempAmount} setTempAmount={setTempAmount} multi={numpadMulti} add={numpadAdd} del={numpadDel} clear={numpadClear}
+                                            onConfirm={handleNumpadConfirm} />
                                     </div>
                                 )}
                                 {overlay.type === 'pay_input' && overlay.step === 'choose_target' && (
@@ -888,7 +1069,7 @@
                                             <div className="flex items-center space-x-4">
                                                 <div className="p-3 bg-blue-500 text-white rounded-full flex items-center justify-center"><i data-lucide="user" className="w-6 h-6"></i></div>
                                                 <div className="text-left">
-                                                    <p className="font-bold text-lg text-gray-800 dark:text-gray-200">轉帳給玩家</p>
+                                                    <p className="font-bold text-lg text-gray-800 dark:text-gray-200">轉帳給其他人</p>
                                                     <p className="text-xs text-gray-500 dark:text-gray-400">產生收款 QR 供對方掃描</p>
                                                 </div>
                                             </div>
@@ -977,64 +1158,6 @@
                             </div>
                         </div>
                     )}
-                </div>
-            );
-        };
-        
-        const WelcomeScreen = ({ onStart, installPrompt }) => {
-            const [name, setName] = useState("");
-            const [error, setError] = useState("");
-
-            const handleChange = (e) => {
-                const val = e.target.value;
-                setName(val);
-                if (val && !validateName(val)) {
-                    setError("僅限輸入英文字母、數字與空白");
-                } else {
-                    setError("");
-                }
-            };
-
-            const handleSubmit = (e) => {
-                e.preventDefault();
-                if (name && !error) {
-                    onStart(name);
-                }
-            };
-
-            return (
-                <div className="h-full flex flex-col items-center justify-center p-8 glass relative">
-                     {installPrompt && (
-                        <div className="absolute top-0 left-0 w-full bg-ios-blue/10 p-4 text-xs text-center text-ios-blue font-bold backdrop-blur-sm z-50 pt-safe-top">
-                            建議使用 Chrome 或 Safari 開啟並安裝到桌面以獲得最佳體驗
-                        </div>
-                    )}
-                    <div className="text-center mb-10">
-                        <h1 className="text-5xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-blue-500 to-purple-600 mb-2">
-                            Monopoly<br/>Wallet
-                        </h1>
-                        <p className="text-gray-500 dark:text-gray-400">地產大亨電子錢包</p>
-                    </div>
-                    <form onSubmit={handleSubmit} className="w-full max-w-xs space-y-4">
-                        <div>
-                            <input 
-                                value={name}
-                                onChange={handleChange}
-                                type="text" 
-                                placeholder="輸入玩家名稱 (英文/數字)" 
-                                className={`w-full p-4 bg-white/50 dark:bg-black/30 rounded-2xl text-center text-lg backdrop-blur-md border ${error ? 'border-red-500 focus:ring-red-500' : 'border-gray-200 dark:border-gray-700 focus:ring-ios-blue'} focus:ring-2 outline-none placeholder-gray-400 text-black dark:text-white transition-all`}
-                                autoFocus 
-                            />
-                            {error && <p className="text-red-500 text-xs text-center mt-2">{error}</p>}
-                        </div>
-                        <button 
-                            type="submit" 
-                            disabled={!name || !!error}
-                            className="w-full bg-ios-blue text-white py-4 rounded-2xl font-bold shadow-lg shadow-blue-500/30 active:scale-95 transition-transform disabled:opacity-50 disabled:active:scale-100"
-                        >
-                            開始遊戲
-                        </button>
-                    </form>
                 </div>
             );
         };
