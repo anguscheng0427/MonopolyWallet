@@ -7,7 +7,7 @@
       "theme_color": "#FFFFFF",
       "icons": [
         {
-          "src": "assers/wallet_icon_512.png",
+          "src": "assets/wallet_icon_512.png",
           "sizes": "512x512",
           "type": "image/png"
         }
