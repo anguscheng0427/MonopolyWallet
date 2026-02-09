@@ -7,7 +7,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
-    <title>地產大亨電子錢包</title>
+    <title>Monopoly Wallet</title>
     <link rel="manifest" href="manifest.json">
     
     <!-- Tailwind CSS -->
@@ -132,6 +132,7 @@
 
         // --- 1. Helpers & Protocol V4 ---
         const INITIAL_BALANCE = 0;
+        const BANK_STATIC_QR = "s|Bank||"; // Defined Constant
         
         const formatMoney = (amount) => {
             return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(amount);
@@ -150,22 +151,17 @@
             return parseInt(val).toLocaleString();
         };
 
-        const generateUUID = () => {
-            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-                var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-                return v.toString(16);
-            });
-        };
-
         const validateName = (name) => {
             return /^[A-Za-z0-9\s]*$/.test(name);
         };
 
         // QR Protocol V4: type|sender|amount|timestamp
         const encodeQR = (type, sender, amount, timestamp) => {
+            if (type === 'bank_static') return BANK_STATIC_QR;
+            
             let t = 'p'; 
             if (type === 'bank_withdraw') t = 'b';
-            if (type === 'bank_static') t = 's';
+            
             // Safety: remove pipes from name to avoid format break
             const safeSender = sender.replace(/\|/g, '');
             return `${t}|${safeSender}|${amount}|${timestamp}`;
@@ -173,7 +169,12 @@
 
         const decodeQR = (str) => {
             try {
-                // Support legacy JSON just in case old QRs exist
+                // Static Code Check
+                if (str === BANK_STATIC_QR || str.startsWith("s|")) {
+                    return { action: 'bank_static' };
+                }
+
+                // Support legacy JSON
                 if (str.startsWith('{')) {
                     const json = JSON.parse(str);
                     return { ...json, id: json.id || `${json.sender}-${json.amount}-${json.timestamp}` };
@@ -181,8 +182,6 @@
 
                 const parts = str.split('|');
                 if (parts.length < 1) throw new Error("Invalid Format");
-
-                if (parts[0] === 's') return { action: 'bank_static' };
 
                 const tMap = { 'p': 'p2p_transfer', 'b': 'bank_withdraw' };
                 const type = tMap[parts[0]] || 'unknown';
@@ -310,7 +309,7 @@
             );
         };
 
-        const Numpad = ({ onConfirm, label = "確定", superMode, tempAmount, setTempAmount, multi, add, del, clear }) => {
+        const Numpad = ({ onConfirm, label = "確定", superMode, tempAmount, setTempAmount, multi, add, del, clear, btnColorClass = "bg-ios-blue" }) => {
             return (
                 <div className="bg-gray-100 dark:bg-[#1C1C1E] border-t border-gray-200 dark:border-gray-800 p-4 rounded-t-3xl shadow-[0_-4px_20px_rgba(0,0,0,0.1)]">
                     <div className="bg-white dark:bg-black text-black dark:text-white border-gray-200 dark:border-gray-800 p-4 rounded-xl mb-4 text-right text-3xl font-mono shadow-inner border h-16 flex items-center justify-end font-bold tracking-wider">
@@ -343,14 +342,14 @@
                             <button onClick={()=>multi(1000)} className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 p-3 rounded-xl font-bold">K</button>
                         </div>
                     )}
-                    <button onClick={onConfirm} className="w-full bg-ios-blue text-white py-4 rounded-xl text-xl font-bold shadow-lg shadow-blue-500/30 active:scale-95 transition-transform">
+                    <button onClick={onConfirm} className={`w-full ${btnColorClass} text-white py-4 rounded-xl text-xl font-bold shadow-lg active:scale-95 transition-transform`}>
                         {label}
                     </button>
                 </div>
             );
         };
 
-        const QRDisplay = ({ value, label, sub, icon, showExpiry = true }) => {
+        const QRDisplay = ({ value, label, sub, icon, timestamp, showExpiry = true }) => {
             const qrRef = useRef();
             useEffect(() => {
                 if (qrRef.current) {
@@ -365,6 +364,14 @@
                     });
                 }
             }, [value]);
+
+            const getExpiryTime = () => {
+                if (!timestamp) return "";
+                const expiryDate = new Date(timestamp + 5 * 60 * 1000); // 5 mins later
+                // Use en-US + hour12: true to match transaction success screen format (e.g., 06:55 PM)
+                return expiryDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+            };
+
             return (
                 <div className="bg-white p-6 rounded-3xl shadow-2xl flex flex-col items-center max-w-sm mx-auto animate-scale-in">
                     <h3 className="text-xl font-bold text-black mb-2">{label}</h3>
@@ -377,7 +384,7 @@
                         </div>
                     </div>
                     <p className="text-gray-500 text-sm">{sub}</p>
-                    {showExpiry && <p className="text-xs text-red-400 mt-2">有效期限 5 分鐘</p>}
+                    {showExpiry && timestamp && <p className="text-xs text-red-400 mt-2">有效期限至 {getExpiryTime()}</p>}
                 </div>
             );
         };
@@ -386,6 +393,7 @@
             const [error, setError] = useState(null);
             const [isProcessing, setIsProcessing] = useState(false);
             const [zoom, setZoom] = useState(1.5); // Default digital zoom
+            const [key, setKey] = useState(0); // For forcing re-render
 
             // Load saved zoom preference
             useEffect(() => {
@@ -398,50 +406,73 @@
                 setZoom(val);
                 localStorage.setItem("scanner_zoom", val);
             };
+            
+            const startScanner = useCallback(() => {
+                 setError(null);
+                 setIsProcessing(false);
+                 
+                 // iPhone 15/PWA Race Condition Fix: Delay start to ensure DOM is ready
+                 setTimeout(() => {
+                    const html5QrCode = new Html5Qrcode("qr-reader");
+                    const config = { 
+                        fps: 15, 
+                        qrbox: 250, 
+                        aspectRatio: 1.0, 
+                        videoConstraints: { 
+                            facingMode: "environment" 
+                        }
+                    };
+                    
+                    html5QrCode.start(
+                        { facingMode: "environment" },
+                        config,
+                        (decodedText) => {
+                            setIsProcessing(true); 
+                            html5QrCode.pause(); 
+                            setTimeout(() => {
+                                html5QrCode.stop().then(() => {
+                                    onScan(decodedText);
+                                }).catch(err => console.error("Stop failed", err));
+                            }, 500);
+                        },
+                        (errorMessage) => { }
+                    ).then(() => {
+                        // iOS Black Screen Fix: Force video attributes after start
+                        const video = document.querySelector("#qr-reader video");
+                        if (video) {
+                            video.setAttribute("playsinline", "true");
+                            video.setAttribute("webkit-playsinline", "true");
+                            video.setAttribute("autoplay", "true");
+                            video.setAttribute("muted", "true");
+                        }
+                    }).catch(err => {
+                        console.error("Camera error", err);
+                        setError("無法啟動相機。請確認已允許權限。");
+                    });
+
+                    // Store instance for cleanup
+                    window.currentScanner = html5QrCode;
+                 }, 400); // 400ms delay for modal animation
+            }, [onScan]);
 
             useEffect(() => {
-                const html5QrCode = new Html5Qrcode("qr-reader");
-                
-                const config = { 
-                    fps: 15, 
-                    qrbox: 250, 
-                    aspectRatio: 1.0, 
-                    videoConstraints: { facingMode: "environment" }
-                };
-                
-                html5QrCode.start(
-                    { facingMode: "environment" },
-                    config,
-                    (decodedText) => {
-                        setIsProcessing(true); 
-                        html5QrCode.pause(); 
-                        setTimeout(() => {
-                            html5QrCode.stop().then(() => {
-                                onScan(decodedText);
-                            }).catch(err => console.error("Stop failed", err));
-                        }, 500);
-                    },
-                    (errorMessage) => { }
-                ).catch(err => {
-                    console.error("Camera error", err);
-                    setError("無法啟動相機。請確認已允許權限，或使用 Safari/Chrome 瀏覽器。");
-                });
-
+                startScanner();
                 return () => {
-                    if (html5QrCode.isScanning) {
-                        html5QrCode.stop().catch(e => console.error("Cleanup stop error", e));
+                    if (window.currentScanner && window.currentScanner.isScanning) {
+                        window.currentScanner.stop().catch(e => console.error("Cleanup stop error", e));
                     }
                 };
-            }, []);
+            }, [key, startScanner]);
 
             return (
-                <div className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center animate-fade-in">
-                    <div className="absolute top-0 left-0 w-full flex justify-between items-center p-4 ios-safe-top text-white z-20">
+                <div className="fixed inset-0 z-[100] bg-black/95 flex flex-col items-center justify-center animate-fade-in">
+                    {/* Fixed Status Bar Overlap: Gradient Background & Z-Index */}
+                    <div className="absolute top-0 left-0 w-full flex justify-between items-center p-4 ios-safe-top text-white z-[110] bg-gradient-to-b from-black/80 to-transparent">
                          <h3 className="font-bold drop-shadow-md">掃描 QR Code</h3>
-                         <button onClick={onClose} className="p-2 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center"><i data-lucide="x"></i></button>
+                         <button onClick={onClose} className="p-2 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center pointer-events-auto"><i data-lucide="x"></i></button>
                     </div>
 
-                    <div className="relative w-[300px] h-[300px] bg-black rounded-3xl overflow-hidden shadow-2xl border-4 border-white/20">
+                    <div className="relative w-[300px] h-[300px] bg-black rounded-3xl overflow-hidden shadow-2xl border-4 border-white/20 z-[90]">
                         {/* Video Container with Zoom */}
                         <div className="w-full h-full relative overflow-hidden">
                             <style>{`
@@ -485,14 +516,23 @@
                     )}
 
                     {error && (
-                        <div className="mt-8 bg-red-600/90 text-white p-4 rounded-xl backdrop-blur-md mx-4 text-center max-w-xs">
+                        <div className="mt-8 bg-red-600/90 text-white p-4 rounded-xl backdrop-blur-md mx-4 text-center max-w-xs z-[110]">
                             <p className="mb-4">{error}</p>
-                            <button onClick={onClose} className="bg-white text-red-600 px-4 py-2 rounded-lg font-bold">關閉</button>
+                            <div className="flex space-x-2 justify-center">
+                                <button onClick={() => setKey(k => k+1)} className="bg-white text-red-600 px-4 py-2 rounded-lg font-bold">重試</button>
+                                <button onClick={onClose} className="bg-black/30 text-white px-4 py-2 rounded-lg font-bold">關閉</button>
+                            </div>
                         </div>
                     )}
                     
                     {!error && !isProcessing && (
-                        <p className="text-white/40 text-xs mt-4">將 QR Code 置於方框中央</p>
+                        <div className="flex flex-col items-center mt-4 space-y-2">
+                             <p className="text-white/40 text-xs">將 QR Code 置於方框中央</p>
+                             {/* Reload Camera Button for Black Screen Issue */}
+                             <button onClick={() => setKey(k => k+1)} className="text-[10px] text-white/30 border border-white/20 rounded-full px-2 py-1 hover:bg-white/10">
+                                鏡頭黑畫面？點此重整
+                             </button>
+                        </div>
                     )}
                 </div>
             );
@@ -509,6 +549,7 @@
             const [overlay, setOverlay] = useState(null);
             const [scanMode, setScanMode] = useState(null);
             const [installPrompt, setInstallPrompt] = useState(false);
+            const [devMode, setDevMode] = useState(false); // New Dev Mode State
             const [modalConfig, setModalConfig] = useState({ isOpen: false, type: 'alert' });
 
             useEffect(() => {
@@ -572,6 +613,12 @@
                 const modes = ['auto', 'light', 'dark'];
                 const next = modes[(modes.indexOf(theme) + 1) % modes.length];
                 setTheme(next);
+            };
+
+            const getThemeLabel = () => {
+                if (theme === 'auto') return '外觀樣式（跟隨系統）';
+                if (theme === 'light') return '外觀樣式（淺色）';
+                return '外觀樣式（深色）';
             };
 
             const getThemeIcon = () => {
@@ -645,6 +692,7 @@
                 const val = parseInt(parseFloat(tempAmount));
                 if (!val) return showModal({ type: 'alert', title: '錯誤', message: '請輸入有效金額', onConfirm: closeModal });
 
+                // 1. Pay Flow
                 if (overlay.type === 'pay_input') {
                     if (userData.balance - val < 0) {
                         showModal({
@@ -663,6 +711,7 @@
                     }
                     setOverlay(prev => ({ ...prev, step: 'choose_target', amount: val }));
 
+                // 2. Bank Static Flow (Player side)
                 } else if (overlay.type === 'bank_static_input') {
                     handleTransaction(val, 'receive', '銀行臨櫃提款', '銀行');
                     setOverlay({ 
@@ -673,6 +722,23 @@
                         sub: '請出示畫面供檢查',
                         theme: 'green'
                     });
+
+                // 3. Settlement Flow
+                } else if (overlay.type === 'settle_input') {
+                    setOverlay(null); // Close input
+                    setTimeout(() => {
+                        showModal({
+                            type: 'confirm',
+                            title: '確認結算',
+                            message: `現金: ${formatMoney(userData.balance)}\n地產: ${formatMoney(val)}\n\n總資產: ${formatMoney(userData.balance + val)}\n確認後將無法繼續遊戲。`,
+                            onConfirm: () => {
+                                setUserData(prev => ({...prev, status: 'settled', settledAssets: val}));
+                                closeModal();
+                                setView('home');
+                            },
+                            onCancel: closeModal
+                        });
+                    }, 300);
                 }
             };
 
@@ -688,7 +754,8 @@
                         payload: qrData, 
                         label: formatMoney(val), 
                         subLabel: "請對方掃描收款", 
-                        icon: 'user' 
+                        icon: 'user',
+                        timestamp: timestamp // Pass timestamp for expiry calculation
                     });
                 }
             };
@@ -714,8 +781,9 @@
                     const data = decodeQR(decodedText);
                     const now = Date.now();
 
+                    // 1. BANK AUTH MODE
                     if (scanMode === 'bank_auth') {
-                        if (decodedText.includes("bank_auth") || data.type === 'bank_auth') {
+                        if (data.type === 'bank_auth' || data.action === 'bank_static' || decodedText === BANK_STATIC_QR) {
                             setView('bank_mode');
                         } else {
                             showModal({ type: 'alert', title: '錯誤', message: '無效的銀行權限 QR Code', onConfirm: closeModal });
@@ -723,12 +791,14 @@
                         return;
                     }
 
+                    // 2. STATIC BANK QR (Normal Mode)
                     if (data.action === 'bank_static') {
                         setTempAmount("");
                         setOverlay({ type: 'bank_static_input' });
                         return;
                     }
 
+                    // 3. REGULAR TRANSACTIONS
                     if (data.timestamp && (now - data.timestamp > 300000)) {
                         throw new Error("QR Code 已過期 (超過5分鐘)");
                     }
@@ -759,7 +829,7 @@
                 showModal({
                     type: 'prompt',
                     title: '銀行模式',
-                    message: '請輸入銀行密碼 (0000)\n或掃描授權 QR',
+                    message: '請輸入銀行密碼\n或掃描授權 QR',
                     inputPlaceholder: '密碼',
                     confirmText: '登入',
                     cancelText: '掃描',
@@ -779,42 +849,31 @@
                 });
             };
 
-            const handleDevDeposit = () => {
-                showModal({
-                    type: 'prompt',
-                    title: '開發者功能',
-                    message: '請輸入開發者密碼',
-                    inputPlaceholder: '密碼',
-                    onConfirm: (pw) => {
-                        if (pw === '8888') {
-                            closeModal();
-                            setTimeout(() => {
-                                showModal({
-                                    type: 'prompt',
-                                    title: '開發者儲值',
-                                    message: '輸入要增加的金額',
-                                    inputPlaceholder: '金額',
-                                    onConfirm: (amt) => {
-                                        const val = parseInt(amt);
-                                        if (val) handleTransaction(val, 'receive', '開發者指令', 'SYSTEM');
-                                        closeModal();
-                                    },
-                                    onCancel: closeModal
-                                });
-                            }, 300);
-                        } else {
-                            closeModal();
-                        }
-                    },
-                    onCancel: closeModal
-                });
+            const handleDevToggle = () => {
+                if (devMode) {
+                    setDevMode(false);
+                } else {
+                    showModal({
+                        type: 'prompt',
+                        title: '開發者模式',
+                        message: '請輸入開發者密碼以啟用',
+                        inputPlaceholder: '密碼',
+                        onConfirm: (pw) => {
+                            if (pw === '8888') {
+                                setDevMode(true);
+                                closeModal();
+                            } else {
+                                closeModal();
+                                showModal({ type: 'alert', title: '錯誤', message: '密碼錯誤', onConfirm: closeModal });
+                            }
+                        },
+                        onCancel: closeModal
+                    });
+                }
             };
 
-            // --- Render Logic (Same as v19) ---
+            // --- Render Logic ---
             
-            // ... (Reusing same render layout as v19, simplified here for brevity, 
-            // the full structure is in the App block above using `overlay` state)
-
             // Views: Welcome
             if (view === 'welcome') {
                 return <WelcomeScreen onStart={(name) => { setUserData({name: name, balance: INITIAL_BALANCE, status: 'active', processedIds: [], settledAssets: 0}); setView("home"); }} installPrompt={installPrompt} />;
@@ -854,9 +913,6 @@
                                 
                                 {view === 'home' && (
                                     <div className="absolute right-5 flex items-center space-x-3">
-                                        <button onClick={enterBankMode} className="p-2 bg-yellow-100 dark:bg-yellow-900/30 rounded-full text-yellow-600 dark:text-yellow-500 flex items-center justify-center">
-                                            <i data-lucide="landmark" className="w-5 h-5"></i>
-                                        </button>
                                         <button onClick={() => setOverlay({type: 'settings'})} className="p-2 bg-gray-100 dark:bg-gray-800 rounded-full text-gray-600 dark:text-gray-300 flex items-center justify-center">
                                             <i data-lucide="settings" className="w-5 h-5"></i>
                                         </button>
@@ -943,30 +999,10 @@
                                 <div className="flex-1 bg-white dark:bg-[#1C1C1E] rounded-t-3xl shadow-[0_-10px_40px_rgba(0,0,0,0.05)] dark:shadow-[0_-10px_40px_rgba(0,0,0,0.3)] p-6 overflow-hidden flex flex-col">
                                     <div className="flex justify-between items-end mb-4">
                                         <h3 className="font-bold text-lg">近期交易</h3>
-                                        <button onClick={() => showModal({
-                                            type: 'prompt',
-                                            title: '遊戲結算',
-                                            message: '遊戲即將結束，請輸入目前持有的房地產總價值：',
-                                            inputPlaceholder: '金額',
-                                            onConfirm: (val) => {
-                                                const assets = parseInt(val) || 0;
-                                                closeModal();
-                                                setTimeout(() => {
-                                                    showModal({
-                                                        type: 'confirm',
-                                                        title: '確認結算',
-                                                        message: `現金: ${formatMoney(userData.balance)}\n地產: ${formatMoney(assets)}\n\n確認後將無法繼續遊戲。`,
-                                                        onConfirm: () => {
-                                                            setUserData(prev => ({...prev, status: 'settled', settledAssets: assets}));
-                                                            closeModal();
-                                                            setView('home');
-                                                        },
-                                                        onCancel: closeModal
-                                                    });
-                                                }, 300);
-                                            },
-                                            onCancel: closeModal
-                                        })} className="text-xs bg-gray-100 dark:bg-gray-800 px-3 py-1 rounded-full text-gray-500">結算</button>
+                                        <button onClick={() => {
+                                            setTempAmount("");
+                                            setOverlay({type: 'settle_input'});
+                                        }} className="text-xs bg-gray-100 dark:bg-gray-800 px-3 py-1 rounded-full text-gray-500">結算</button>
                                     </div>
                                     <div className="flex-1 overflow-y-auto space-y-4 pb-20 hide-scrollbar">
                                         {history.length === 0 && <div className="text-center text-gray-400 py-10">尚無交易</div>}
@@ -1003,29 +1039,65 @@
                                         銀行模式
                                     </h2>
                                     <div className="flex gap-2">
-                                        <button onClick={handleDevDeposit} className="text-xs bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded text-gray-500">DEV</button>
+                                        <button onClick={() => setOverlay({ 
+                                            type: 'show_qr', 
+                                            payload: BANK_STATIC_QR, 
+                                            label: "銀行櫃台", 
+                                            subLabel: "掃描以取款或登入銀行", 
+                                            icon: 'landmark',
+                                            showExpiry: false
+                                        })} className="text-sm bg-gray-100 dark:bg-gray-800 p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700">
+                                            <i data-lucide="qr-code" className="w-5 h-5 text-gray-600 dark:text-gray-300"></i>
+                                        </button>
+                                        <button onClick={handleDevToggle} className={`text-xs px-2 py-1 rounded transition-colors ${devMode ? 'bg-red-500 text-white font-bold' : 'bg-gray-100 dark:bg-gray-800 text-gray-500'}`}>
+                                            {devMode ? 'DEV (ON)' : 'DEV'}
+                                        </button>
                                         <button onClick={() => setView('home')} className="text-sm bg-gray-100 dark:bg-gray-800 px-3 py-1 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700">離開</button>
                                     </div>
                                 </div>
                                 <div className="flex-1 flex flex-col">
                                     <div className="flex-1 flex flex-col justify-center items-center p-6 text-center">
-                                        <p className="text-gray-400 mb-2">輸入撥款金額</p>
+                                        <p className="text-gray-400 mb-2">{devMode ? '開發者強制儲值模式' : '輸入撥款金額'}</p>
                                         <div className="flex space-x-2 mb-4">
                                             <button onClick={() => setSuperMode(!superMode)} className={`px-4 py-1 rounded-full text-xs font-bold border transition-colors ${superMode ? 'bg-yellow-500 text-black border-yellow-500' : 'text-gray-500 border-gray-300 dark:border-gray-700'}`}>
                                                 {superMode ? 'SUPER MODE ON' : 'Standard Mode'}
                                             </button>
                                         </div>
                                     </div>
-                                    <Numpad label="產生取款 QR" 
+                                    <Numpad label={devMode ? "儲值到錢包（請勿作弊）" : "產生取款 QR"} 
+                                        btnColorClass={devMode ? "bg-red-600" : "bg-ios-blue"}
                                         superMode={superMode} tempAmount={tempAmount} setTempAmount={setTempAmount} multi={numpadMulti} add={numpadAdd} del={numpadDel} clear={numpadClear}
                                         onConfirm={() => {
                                         const rawVal = tempAmount.replace(/,/g, '');
                                         const val = parseInt(rawVal);
                                         if (!val) return;
-                                        // Bank Generate QR (COMPACT)
-                                        const qrData = encodeQR('bank_withdraw', 'Bank', val, Date.now());
-                                        setOverlay({ type: 'show_qr', payload: qrData, label: formatMoney(val), subLabel: "銀行撥款", icon: 'landmark' });
-                                        setTempAmount("");
+                                        
+                                        if (devMode) {
+                                            // Dev Direct Deposit
+                                            handleTransaction(val, 'receive', '開發者指令', 'SYSTEM');
+                                            setOverlay({ 
+                                                type: 'success_msg', 
+                                                title: '強制儲值成功', 
+                                                msg: `DEV 指令`, 
+                                                amount: val, 
+                                                theme: 'rose', 
+                                                sub: '已存入錢包' 
+                                            });
+                                            setTempAmount("");
+                                        } else {
+                                            // Normal Bank Generate QR (COMPACT)
+                                            const timestamp = Date.now();
+                                            const qrData = encodeQR('bank_withdraw', 'Bank', val, timestamp);
+                                            setOverlay({ 
+                                                type: 'show_qr', 
+                                                payload: qrData, 
+                                                label: formatMoney(val), 
+                                                subLabel: "銀行撥款", 
+                                                icon: 'landmark',
+                                                timestamp: timestamp
+                                            });
+                                            setTempAmount("");
+                                        }
                                     }} />
                                 </div>
                             </div>
@@ -1037,7 +1109,7 @@
                             <div className="ios-safe-top bg-white dark:bg-[#1C1C1E]"></div>
                             <div className="bg-white dark:bg-[#1C1C1E] p-4 flex justify-between items-center shadow-sm border-b border-gray-200 dark:border-gray-800">
                                 <h2 className="text-lg font-bold">
-                                    {overlay.type === 'pay_input' || overlay.type === 'bank_static_input' ? '輸入金額' : 
+                                    {overlay.type === 'pay_input' || overlay.type === 'bank_static_input' || overlay.type === 'settle_input' ? '輸入金額' : 
                                      overlay.type === 'show_qr' ? 'QR Code' : 
                                      overlay.type === 'settings' ? '設定' : '訊息'}
                                 </h2>
@@ -1045,17 +1117,18 @@
                             </div>
                             
                             <div className="flex-1 overflow-y-auto flex flex-col">
-                                {(overlay.type === 'pay_input' || overlay.type === 'bank_static_input') && !overlay.step && (
+                                {(overlay.type === 'pay_input' || overlay.type === 'bank_static_input' || overlay.type === 'settle_input') && !overlay.step && (
                                     <div className="h-full flex flex-col justify-between">
                                         <div className="flex-1 flex flex-col items-center justify-center">
                                             <p className="text-gray-500">
-                                                {overlay.type === 'bank_static_input' ? '輸入取款金額' : '輸入支付金額'}
+                                                {overlay.type === 'bank_static_input' ? '輸入取款金額' : 
+                                                 overlay.type === 'settle_input' ? '輸入房地產總價值' : '輸入支付金額'}
                                             </p>
                                             <button onClick={() => setSuperMode(!superMode)} className={`mt-4 px-3 py-1 rounded-full text-xs font-bold border ${superMode ? 'bg-yellow-500 text-white border-yellow-500' : 'text-gray-400 border-gray-300 dark:border-gray-700'}`}>
                                                 {superMode ? 'SUPER' : 'NORMAL'}
                                             </button>
                                         </div>
-                                        <Numpad label={overlay.type === 'bank_static_input' ? "確認領取" : "下一步"} 
+                                        <Numpad label={overlay.type === 'bank_static_input' ? "確認領取" : overlay.type === 'settle_input' ? "下一步" : "下一步"} 
                                             superMode={superMode} tempAmount={tempAmount} setTempAmount={setTempAmount} multi={numpadMulti} add={numpadAdd} del={numpadDel} clear={numpadClear}
                                             onConfirm={handleNumpadConfirm} />
                                     </div>
@@ -1090,7 +1163,7 @@
                                 )}
                                 {overlay.type === 'show_qr' && (
                                     <div className="flex-1 flex flex-col items-center justify-center p-6 bg-gray-50 dark:bg-black">
-                                        <QRDisplay value={overlay.payload} label={overlay.label} sub={overlay.subLabel} icon={overlay.icon} showExpiry={overlay.icon !== 'share'} />
+                                        <QRDisplay value={overlay.payload} label={overlay.label} sub={overlay.subLabel} icon={overlay.icon} timestamp={overlay.timestamp} showExpiry={overlay.showExpiry ?? true} />
                                     </div>
                                 )}
                                 {overlay.type === 'success_msg' && (
@@ -1144,14 +1217,20 @@
                                                 <i data-lucide="edit-2" className="w-4 h-4 text-gray-400"></i>
                                             </button>
                                             <button onClick={toggleTheme} className="w-full p-4 flex justify-between items-center active:bg-gray-50 dark:active:bg-gray-700">
-                                                <span>外觀模式 ({theme})</span>
+                                                <span>{getThemeLabel()}</span>
                                                 <i data-lucide={getThemeIcon()} className="w-4 h-4 text-gray-400"></i>
                                             </button>
                                         </div>
                                         <div className="bg-white dark:bg-[#2C2C2E] rounded-xl overflow-hidden">
-                                            <button onClick={() => setOverlay({ type: 'show_qr', payload: window.location.href, label: "分享遊戲", subLabel: "掃描以開啟此網頁", icon: 'share' })} className="w-full p-4 flex justify-between items-center border-b border-gray-100 dark:border-gray-700 active:bg-gray-50 dark:active:bg-gray-700">
+                                            <button onClick={() => setOverlay({ type: 'show_qr', payload: window.location.href, label: "分享遊戲", subLabel: "掃描以開啟此網頁", icon: 'share' })} className="w-full p-4 flex justify-between items-center active:bg-gray-50 dark:active:bg-gray-700">
                                                 <span>分享此程式 (QR)</span>
                                                 <i data-lucide="qr-code" className="w-4 h-4 text-gray-400"></i>
+                                            </button>
+                                        </div>
+                                        <div className="bg-white dark:bg-[#2C2C2E] rounded-xl overflow-hidden">
+                                            <button onClick={() => { setOverlay(null); enterBankMode(); }} className="w-full p-4 flex justify-between items-center text-yellow-600 dark:text-yellow-500 active:bg-gray-50 dark:active:bg-gray-700">
+                                                <span>切換至銀行模式</span>
+                                                <i data-lucide="landmark" className="w-4 h-4"></i>
                                             </button>
                                         </div>
                                     </div>
@@ -1168,5 +1247,3 @@
     </script>
 </body>
 </html>
-
-
