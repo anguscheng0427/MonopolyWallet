@@ -434,7 +434,7 @@
                                 html5QrCode.stop().then(() => {
                                     onScan(decodedText);
                                 }).catch(err => console.error("Stop failed", err));
-                            }, 500);
+                            }, 100);
                         },
                         (errorMessage) => { }
                     ).then(() => {
